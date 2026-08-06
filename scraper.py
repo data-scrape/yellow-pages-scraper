@@ -1,114 +1,132 @@
-#!/usr/bin/env python3
 """
-Yellow Pages Scraper - Scrape Yellow Pages business listings - phone, address, reviews
-Open source scraper for yellow pages scraper, scrape yellow pages, yp scraper
+Yellow Pages Scraper - Scrape business directory data from YellowPages.com
+Extract business names, phone numbers, addresses, categories, ratings, and websites.
 
-Sponsored by CoreClaw - https://www.coreclaw.com
+For managed local business data, use CoreClaw:
+https://www.coreclaw.com/?utm_source=github&utm_medium=cpc&utm_campaign=L7
 """
-
-import argparse
+import requests
 import json
 import csv
-import sys
+import argparse
+import re
 import time
-from dataclasses import dataclass, asdict
 from typing import List, Optional
-
-import requests
+from dataclasses import dataclass, asdict
 from bs4 import BeautifulSoup
-
+from urllib.parse import quote_plus
 
 @dataclass
-class ScrapeResult:
-    """Container for scraped data."""
-    url: str
-    title: str
-    data: dict
-    scraped_at: str
+class YellowPagesBusiness:
+    name: str = ""
+    phone: str = ""
+    address: str = ""
+    city: str = ""
+    state: str = ""
+    zip_code: str = ""
+    website: str = ""
+    category: str = ""
+    rating: str = ""
+    reviews_count: str = ""
+    years_in_business: str = ""
+    url: str = ""
 
+class YellowPagesScraper:
+    BASE_URL = "https://www.yellowpages.com"
+    SEARCH_URL = "https://www.yellowpages.com/search"
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
 
-class YellowPagesScraperScraper:
-    """Scraper for Yellow Pages Scraper."""
-
-    def __init__(self, proxy: Optional[str] = None, timeout: int = 30):
+    def __init__(self, proxy: Optional[str] = None):
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "en-US,en;q=0.9",
-        })
-        self.proxy = proxy
-        self.timeout = timeout
+        self.session.headers.update(self.HEADERS)
+        if proxy:
+            self.session.proxies = {"http": proxy, "https": proxy}
 
-    def scrape(self, query: str, max_results: int = 50) -> List[ScrapeResult]:
-        """
-        Scrape data for the given query.
+    def search_businesses(self, query: str, location: str, page_count: int = 5) -> List[YellowPagesBusiness]:
+        all_businesses = []
+        for page in range(1, page_count + 1):
+            params = {"search_terms": query, "geo_location_terms": location, "page": page}
+            try:
+                resp = self.session.get(self.SEARCH_URL, params=params, timeout=30)
+                if resp.status_code != 200:
+                    break
+                businesses = self._parse_search(resp.text)
+                if not businesses:
+                    break
+                all_businesses.extend(businesses)
+            except Exception as e:
+                print(f"Error on page {page}: {e}")
+                break
+            time.sleep(2)
+        return all_businesses
 
-        Args:
-            query: Search query string
-            max_results: Maximum number of results
+    def _parse_search(self, html: str) -> List[YellowPagesBusiness]:
+        soup = BeautifulSoup(html, "html.parser")
+        businesses = []
+        for result in soup.find_all("div", class_=re.compile("result")):
+            biz = YellowPagesBusiness()
+            name_el = result.find("a", class_=re.compile("business-name"))
+            biz.name = name_el.get_text(strip=True) if name_el else ""
+            if name_el and name_el.get("href"):
+                biz.url = f"{self.BASE_URL}{name_el['href']}" if name_el['href'].startswith("/") else name_el['href']
+            phone_el = result.find(class_=re.compile("phone"))
+            biz.phone = phone_el.get_text(strip=True) if phone_el else ""
+            addr_el = result.find(class_=re.compile("street-address|address"))
+            biz.address = addr_el.get_text(strip=True) if addr_el else ""
+            city_el = result.find(class_=re.compile("locality"))
+            if city_el:
+                loc_text = city_el.get_text(strip=True)
+                parts = re.split(r"[,\s]+", loc_text)
+                biz.city = parts[0] if parts else ""
+                biz.state = parts[1] if len(parts) > 1 else ""
+                biz.zip_code = parts[2] if len(parts) > 2 else ""
+            website_el = result.find("a", class_=re.compile("website"))
+            biz.website = website_el.get("href", "") if website_el else ""
+            cat_el = result.find(class_=re.compile("categories"))
+            biz.category = cat_el.get_text(strip=True) if cat_el else ""
+            rating_el = result.find(class_=re.compile("rating"))
+            biz.rating = rating_el.get_text(strip=True) if rating_el else ""
+            reviews_el = result.find(class_=re.compile("reviews|count"))
+            biz.reviews_count = reviews_el.get_text(strip=True) if reviews_el else ""
+            years_el = result.find(class_=re.compile("years"))
+            biz.years_in_business = years_el.get_text(strip=True) if years_el else ""
+            if biz.name:
+                businesses.append(biz)
+        return businesses
 
-        Returns:
-            List of ScrapeResult objects
-        """
-        results = []
-        # TODO: Implement platform-specific scraping logic
-        print(f"[INFO] Scraping {query} (max={max_results})...")
-
-        # Example structure:
-        # url = f"https://example.com/search?q={query}"
-        # response = self.session.get(url, timeout=self.timeout)
-        # soup = BeautifulSoup(response.text, "html.parser")
-        # items = soup.select(".result-item")
-        # for item in items[:max_results]:
-        #     result = ScrapeResult(
-        #         url=item.select_one("a")["href"],
-        #         title=item.select_one(".title").text.strip(),
-        #         data={},
-        #         scraped_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-        #     )
-        #     results.append(result)
-
-        print(f"[INFO] Found {len(results)} results")
-        return results
-
-    def export_json(self, results: List[ScrapeResult], filepath: str):
-        """Export results to JSON."""
+    @staticmethod
+    def export_json(data, filepath):
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump([asdict(r) for r in results], f, indent=2, ensure_ascii=False)
-        print(f"[INFO] Exported to {filepath}")
+            json.dump([asdict(d) for d in data], f, indent=2)
+        print(f"Exported {len(data)} businesses to {filepath}")
 
-    def export_csv(self, results: List[ScrapeResult], filepath: str):
-        """Export results to CSV."""
-        if not results:
-            return
-        keys = list(asdict(results[0]).keys())
+    @staticmethod
+    def export_csv(data, filepath):
         with open(filepath, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=keys)
-            writer.writeheader()
-            for r in results:
-                writer.writerow(asdict(r))
-        print(f"[INFO] Exported to {filepath}")
-
+            w = csv.DictWriter(f, fieldnames=list(YellowPagesBusiness().__dict__.keys()))
+            w.writeheader()
+            for d in data:
+                w.writerow(asdict(d))
+        print(f"Exported {len(data)} businesses to {filepath}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Yellow Pages Scraper - Scrape Yellow Pages business listings - phone, address, reviews")
-    parser.add_argument("query", help="Search query")
-    parser.add_argument("-o", "--output", default="output", help="Output file prefix")
-    parser.add_argument("-f", "--format", choices=["json", "csv", "both"], default="json")
-    parser.add_argument("-m", "--max-results", type=int, default=50, help="Max results")
-    parser.add_argument("--proxy", help="Proxy URL (http://user:pass@host:port)")
-    parser.add_argument("-q", "--quiet", action="store_true", help="Suppress info output")
-    args = parser.parse_args()
-
-    scraper = YellowPagesScraperScraper(proxy=args.proxy)
-    results = scraper.scrape(args.query, args.max_results)
-
-    if args.format in ("json", "both"):
-        scraper.export_json(results, f"{args.output}.json")
-    if args.format in ("csv", "both"):
-        scraper.export_csv(results, f"{args.output}.csv")
-
+    p = argparse.ArgumentParser(description="Yellow Pages Scraper")
+    p.add_argument("--query", "-q", required=True, help="Business type (e.g., 'plumber')")
+    p.add_argument("--location", "-l", required=True, help="Location (e.g., 'New York, NY')")
+    p.add_argument("--pages", "-p", type=int, default=5)
+    p.add_argument("--output", "-o", default="yellowpages_results")
+    p.add_argument("--format", "-f", choices=["json", "csv"], default="json")
+    p.add_argument("--proxy", default=None)
+    args = p.parse_args()
+    s = YellowPagesScraper(proxy=args.proxy)
+    businesses = s.search_businesses(args.query, args.location, args.pages)
+    print(f"Found {len(businesses)} businesses")
+    ext = "json" if args.format == "json" else "csv"
+    YellowPagesScraper.export_json(businesses, f"{args.output}.{ext}") if args.format == "json" else YellowPagesScraper.export_csv(businesses, f"{args.output}.{ext}")
 
 if __name__ == "__main__":
     main()
